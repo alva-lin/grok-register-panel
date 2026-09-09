@@ -4301,6 +4301,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._json(500, {"ok": False, "error": redact_log_line(str(e))})
             return
+        if u.path == "/api/export-grok2api":
+            try:
+                from webui import grok2api_export
+                self._json(200, grok2api_export.export_status())
+            except Exception as e:
+                self._json(500, {"ok": False, "error": redact_log_line(str(e))})
+            return
         if u.path == "/api/proxies":
             try:
                 self._json(200, read_proxy_pool())
