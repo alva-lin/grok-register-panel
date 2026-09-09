@@ -2536,8 +2536,6 @@ def main() -> int:
                 if args.bfs_disable and cpa_record.get("bfs") is True:
                     cpa_record["disabled"] = True
                     print("  ⚠️ bfs 账号已标记 disabled=true")
-                if args.quality_probe:
-                    stamp_converted_record_quality(cpa_record, proxy=args.proxy)
 
             if args.grok2api_auth_dir:
                 extra = None
@@ -2567,6 +2565,10 @@ def main() -> int:
                         proxy=args.proxy,
                     )
                     print(f"  💾 CPA 远程 → {args.cpa_remote_url.rstrip('/')}/.../{name}")
+
+                # 降智/风控短测放在写盘之后：无论探针结果如何，token 已落盘（R54 教训：探针 403 曾被主进程中断导致凭证丢失）
+                if args.quality_probe:
+                    stamp_converted_record_quality(cpa_record, proxy=args.proxy)
 
             ok += 1
             succeeded_ssos.add(sso)
