@@ -202,19 +202,7 @@ def export_to_grok2api() -> dict:
     todo = [email.lower() for email in valid if email.lower() in local and email.lower() not in existing]
     if not todo:
         return {"ok": True, "to_export": 0, "message": "没有待导出的账号（全部已入库或无有效标签）"}
-    # 5) 自动建节点：从当前最大节点 id + 1 起
-    code, nd = _json_req("GET", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes?page=1&pageSize=500", token=token)
-    nodes = (nd.get("data") or {}).get("items") or []
-    max_id = max([int(n.get("id") or 0) for n in nodes] or [0])
-    node_ids = []
-    for i, email in enumerate(todo):
-        seq = max_id + 1 + i
-        proxy = f"http://{platform}.grok-{seq:03d}:{proxy_token}@{gateway}"
-        code, r = _json_req("POST", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes",
-                            {"name": f"eg-{seq:03d}", "scope": "grok_build", "proxyURL": proxy}, token=token)
-        nid = (r.get("data") or {}).get("id") or r.get("id")
-        node_ids.append(nid)
-    # 6) multipart 导入
+    # 5) multipart 导入
     files, emails = [], []
     for email in todo:
         rec = local[email]
@@ -239,6 +227,18 @@ def export_to_grok2api() -> dict:
                 break
     if ids:
         _json_req("PATCH", g2a_url.rstrip("/") + "/api/admin/v1/accounts/batch", {"ids": ids, "enabled": True, "provider": "grok_build"}, token=token)
+    # 6) 建/复用节点：优先复用无绑定的空节点，差额才新建（根治空节点堆积）
+    code, nd = _json_req("GET", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes?page=1&pageSize=500", token=token)
+    nodes = (nd.get("data") or {}).get("items") or []
+    reusable = [n for n in nodes if not (n.get("assignedAccountCount") or 0)]
+    max_id = max([int(n.get("id") or 0) for n in nodes] or [0])
+    node_ids = [int(n["id"]) for n in reusable[: len(ids)]]
+    for i in range(len(node_ids), len(ids)):
+        seq = max_id + 1 + (i - len(node_ids)) + 1
+        proxy = f"http://{platform}.grok-{seq:03d}:{proxy_token}@{gateway}"
+        code, r = _json_req("POST", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes",
+                            {"name": f"eg-{seq:03d}", "scope": "grok_build", "proxyURL": proxy}, token=token)
+        node_ids.append((r.get("data") or {}).get("id") or r.get("id"))
     for nid, aid in zip(node_ids, ids):
         _json_req("POST", g2a_url.rstrip("/") + f"/api/admin/v1/egress-nodes/{nid}/accounts",
                   {"provider": "grok_build", "ids": [aid], "mode": "auto"}, token=token)
