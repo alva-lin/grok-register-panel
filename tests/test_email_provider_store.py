@@ -55,14 +55,22 @@ def test_provider_schema_and_defaults():
             "cloudmail",
             "moemail",
             "outlook_rt",
+            "outlookmail",
             "inbucket",
         }
         assert providers["outlook_rt"]["configured"] is False
-        assert providers["outlook_rt"]["recommended"] is True
+        assert providers["outlook_rt"]["recommended"] is False
         assert providers["outlook_rt"]["kind"] == "mailbox"
+        assert providers["outlookmail"]["configured"] is False
+        assert providers["outlookmail"]["recommended"] is True
+        assert providers["outlookmail"]["kind"] == "mailbox"
+        assert any(
+            field["name"] == "outlookmail_group_id"
+            for field in providers["outlookmail"]["fields"]
+        )
         assert providers["cloudflare"]["kind"] == "domain"
         assert providers["cloudflare"]["recommended"] is False
-        assert state["recommended_provider"] == "outlook_rt"
+        assert state["recommended_provider"] == "outlookmail"
         assert "域名邮箱" in (state.get("recommend_note") or "")
         assert any(
             field["name"] == "outlook_rt_inventory"
