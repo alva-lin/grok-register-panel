@@ -2085,6 +2085,7 @@ HTML = r"""<!DOCTYPE html>
         <button class="primary" id="btn-start" onclick="doStart()">启动任务</button>
         <button class="danger" id="btn-stop" onclick="doStop()">停止任务</button>
         <button onclick="saveCtrl()">保存设置</button>
+        <button id="btn-export-g2a" onclick="doExportG2A()" title="将带 Grok-成功 标签且未入库的账号导入 grok2api（自动建出口节点）">导出到 Grok2API</button>
       </div>
     </div>
     <div class="msg" id="ctrl-msg" role="status" aria-live="polite"></div>
@@ -3431,6 +3432,18 @@ async function doStart() {
   } catch (e) { setMsg("ctrl-msg", String(e.message || e), "err"); }
   document.getElementById("btn-start").disabled = false;
 }
+async function doExportG2A() {
+  const btn = document.getElementById("btn-export-g2a");
+  btn.disabled = true;
+  setMsg("ctrl-msg", "导出中…", "ok");
+  try {
+    const j = await api("/api/export-grok2api", { method: "POST", body: "{}" });
+    if (j.ok === false) throw new Error(j.error || "export failed");
+    setMsg("ctrl-msg", (j.message || "导出完成") + "（待导出 " + (j.to_export||0) + "，导入 " + (j.created||0) + "，建节点 " + (j.nodes||0) + "）", "ok");
+    setTimeout(refresh, 1500);
+  } catch (e) { setMsg("ctrl-msg", String(e.message || e), "err"); }
+  btn.disabled = false;
+}
 async function doStop() {
   document.getElementById("btn-stop").disabled = true;
   try {
@@ -4454,6 +4467,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, result)
             except ValueError as e:
                 self._json(400, {"ok": False, "error": redact_log_line(str(e))})
+            except Exception as e:
+                self._json(500, {"ok": False, "error": redact_log_line(str(e))})
+            return
+        if u.path == "/api/export-grok2api":
+            try:
+                from webui import grok2api_export
+                result = grok2api_export.export_to_grok2api()
+                self._json(200 if result.get("ok") else 424, result)
             except Exception as e:
                 self._json(500, {"ok": False, "error": redact_log_line(str(e))})
             return
