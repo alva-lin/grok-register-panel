@@ -272,6 +272,26 @@ def check_email_api(provider: str, config: dict, http_get: Callable, http_post: 
                 return "邮箱API", False, f"Inbucket HTTP {resp.status_code}"
             return "邮箱API", True, f"Inbucket 可达 HTTP {resp.status_code}（域名 {','.join(domains)[:80]}）"
 
+        if provider == "outlookmail":
+            from email_providers import outlookmail as outlookmail_provider
+
+            base = outlookmail_provider.normalize_base(
+                str(config.get("outlookmail_api_base") or "")
+            )
+            key = str(config.get("outlookmail_api_key") or "").strip()
+            if not key:
+                return "邮箱API", False, "未配置 outlookmail_api_key（平台设置页 API Key）"
+            try:
+                info = outlookmail_provider.probe_config(
+                    base,
+                    key,
+                    str(config.get("outlookmail_group_id") or ""),
+                    str(config.get("outlookmail_tag_prefix") or "") or outlookmail_provider.DEFAULT_TAG_PREFIX,
+                )
+                return "邮箱API", True, info["message"]
+            except Exception as exc:
+                return "邮箱API", False, redact_log_line(str(exc))
+
         if provider == "outlook_rt":
             from email_providers import outlook_rt as outlook_rt_provider
 

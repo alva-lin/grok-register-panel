@@ -20,7 +20,8 @@ CONFIG_PATH = Path(
 LOCK_PATH = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".lock")
 
 PROVIDER_LABELS = {
-    "outlook_rt": "Outlook RT 库存（推荐）",
+    "outlookmail": "OutlookMail 平台（推荐）",
+    "outlook_rt": "Outlook RT 库存",
     "duckmail": "DuckMail / Mail.tm",
     "mailnest": "MailNest",
     "yyds": "YYDS",
@@ -31,6 +32,7 @@ PROVIDER_LABELS = {
 }
 PROVIDER_KIND = {
     "outlook_rt": "mailbox",
+    "outlookmail": "mailbox",
     "duckmail": "mailbox",
     "mailnest": "mailbox",
     "yyds": "domain",
@@ -40,7 +42,8 @@ PROVIDER_KIND = {
     "inbucket": "domain",
 }
 PROVIDER_HINTS = {
-    "outlook_rt": "推荐：Outlook 等真实邮箱，配合家宽出口",
+    "outlookmail": "平台=唯一真相源，标签=使用状态（Grok-使用中/成功/失败），推荐",
+    "outlook_rt": "Outlook 等真实邮箱，配合家宽出口（明文 RT 库存）",
     "duckmail": "第三方临时邮，稳定性不如 Outlook",
     "mailnest": "第三方临时邮，稳定性不如 Outlook",
     "yyds": "域名邮箱，容易被拒，不推荐作为主路径",
@@ -49,7 +52,7 @@ PROVIDER_HINTS = {
     "moemail": "域名邮箱，容易被拒，不推荐作为主路径",
     "inbucket": "自建域名邮箱，容易被拒，不推荐作为主路径",
 }
-RECOMMENDED_PROVIDERS = ("outlook_rt",)
+RECOMMENDED_PROVIDERS = ("outlookmail",)
 DOMAIN_PROVIDERS = tuple(
     name for name, kind in PROVIDER_KIND.items() if kind == "domain"
 )
@@ -190,6 +193,30 @@ FIELD_DEFINITIONS = {
             {"value": 0, "label": "永久"},
         ],
     },
+    "outlookmail_api_base": {
+        "label": "平台 API 地址",
+        "type": "url",
+        "default": "https://mail-pool.yuheng.site",
+        "placeholder": "https://mail-pool.yuheng.site",
+    },
+    "outlookmail_api_key": {
+        "label": "平台 API Key",
+        "type": "password",
+        "secret": True,
+        "placeholder": "平台设置页「API Key」（external_api_key）",
+    },
+    "outlookmail_group_id": {
+        "label": "使用的分组",
+        "type": "select",
+        "options": [{"value": "", "label": "全部（按可用数轮取）"}],
+        "placeholder": "保存 API Key 后自动列出分组与剩余数",
+    },
+    "outlookmail_tag_prefix": {
+        "label": "标签前缀",
+        "type": "text",
+        "default": "Grok-",
+        "placeholder": "Grok-",
+    },
     "outlook_rt_inventory": {
         "label": "库存文件路径",
         "type": "text",
@@ -257,6 +284,12 @@ PROVIDER_FIELDS = {
         "moemail_api_key",
         "moemail_domain",
         "moemail_expiry_ms",
+    ),
+    "outlookmail": (
+        "outlookmail_api_base",
+        "outlookmail_api_key",
+        "outlookmail_group_id",
+        "outlookmail_tag_prefix",
     ),
     "outlook_rt": (
         "outlook_rt_inventory",
@@ -410,6 +443,35 @@ def _field_payload(name: str) -> dict:
     return {"name": name, **definition}
 
 
+def _provider_fields_payload(provider: str, values: dict) -> list:
+    """字段 payload；outlookmail 的分组下拉在现场从平台拉取（名称+剩余/总数）。"""
+    fields = []
+    for name in PROVIDER_FIELDS[provider]:
+        payload = _field_payload(name)
+        if provider == "outlookmail" and name == "outlookmail_group_id":
+            try:
+                from email_providers import outlookmail as _om
+                stats = _om.group_stats(
+                    str(values.get("outlookmail_api_base") or "") or _om.DEFAULT_API_BASE,
+                    str(values.get("outlookmail_api_key") or ""),
+                    str(values.get("outlookmail_tag_prefix") or "") or _om.DEFAULT_TAG_PREFIX,
+                )
+                options = [{"value": "", "label": "全部（按可用数轮取）"}]
+                options += [
+                    {
+                        "value": str(g["group_id"]),
+                        "label": f'{g["group_name"]}（剩 {g["available"]}/{g["total"]}）',
+                    }
+                    for g in stats
+                ]
+                payload = dict(payload)
+                payload["options"] = options
+            except Exception:
+                pass
+        fields.append(payload)
+    return fields
+
+
 def _merged(raw: dict) -> dict:
     return {**DEFAULT_VALUES, **raw}
 
@@ -435,6 +497,8 @@ def _is_configured(provider: str, values: dict) -> bool:
         )
     if provider == "moemail":
         return bool(values.get("moemail_api_base") and values.get("moemail_api_key"))
+    if provider == "outlookmail":
+        return bool(values.get("outlookmail_api_key"))
     if provider == "outlook_rt":
         inventory = str(values.get("outlook_rt_inventory") or "").strip()
         return bool(inventory and Path(inventory).expanduser().is_file())
@@ -463,7 +527,7 @@ def _public_state(raw: dict, error: str = "") -> dict:
                 "recommended": provider in RECOMMENDED_PROVIDERS,
                 "kind": PROVIDER_KIND.get(provider, "mailbox"),
                 "hint": PROVIDER_HINTS.get(provider, ""),
-                "fields": [_field_payload(name) for name in PROVIDER_FIELDS[provider]],
+                "fields": _provider_fields_payload(provider, values),
             }
         )
     try:
