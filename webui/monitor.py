@@ -3394,9 +3394,14 @@ async function refresh() {
     if (message.includes("令牌")) setMsg("ctrl-msg", message, "err");
   }
 }
+let lastCtrlFill = "";
 function fillControl(d) {
   const c = d.control || {};
   if (document.activeElement && ["workers-input","batch_count","add_count","risk_pause","mode"].includes(document.activeElement.id)) return;
+  // 仅在服务器保存值发生变化时才回填；未保存的本地编辑不被轮询覆盖
+  const sig = JSON.stringify(c || {});
+  if (sig === lastCtrlFill) return;
+  lastCtrlFill = sig;
   if (c.workers != null) document.getElementById("workers-input").value = c.workers;
   if (c.batch_count != null) document.getElementById("batch_count").value = c.batch_count;
   if (c.add_count != null && document.getElementById("add_count")) document.getElementById("add_count").value = c.add_count;
