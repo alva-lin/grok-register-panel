@@ -1443,7 +1443,7 @@ return 'clicked';
             if log_callback:
                 log_callback(f"[*] 已填写验证码并提交: {code}")
             _try_otp_enter()
-            wait_until = time.time() + 12
+            wait_until = time.time() + 24
             last_step = ""
             while time.time() < wait_until:
                 raise_if_cancelled(cancel_callback)
