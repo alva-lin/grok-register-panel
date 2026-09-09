@@ -1979,7 +1979,7 @@ def outlook_rt_take_mailbox():
         default_client_id=get_outlook_rt_client_id(),
         http_post=http_post,
         http_get=http_get,
-        log_callback=_log,
+        log_callback=cli_log,
         max_attempts=20,
         skip_empty_inbox=True,
     )
@@ -2010,7 +2010,7 @@ def outlookmail_take_mailbox():
         api_key=key,
         group_id=get_outlookmail_group_id(),
         prefix=get_outlookmail_tag_prefix(),
-        log_callback=_log,
+        log_callback=cli_log,
     )
 
 
