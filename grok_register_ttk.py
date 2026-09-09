@@ -39,6 +39,7 @@ from email_providers import inbucket as inbucket_provider
 from email_providers import mailnest as mailnest_provider
 from email_providers import moemail as moemail_provider
 from email_providers import outlook_rt as outlook_rt_provider
+from email_providers import outlookmail as outlookmail_provider
 from email_providers import yyds as yyds_provider
 from email_providers.common import extract_verification_code as _extract_code
 from email_providers.common import generate_username as _generate_username
@@ -247,6 +248,11 @@ DEFAULT_CONFIG = {
     "outlook_rt_inventory": "",
     "outlook_rt_used_path": "",
     "outlook_rt_client_id": outlook_rt_provider.DEFAULT_CLIENT_ID,
+    # OutlookMail 平台（B 方案：平台=唯一真相源，标签=使用状态；API Key 见平台设置页）
+    "outlookmail_api_base": outlookmail_provider.DEFAULT_API_BASE,
+    "outlookmail_api_key": "",
+    "outlookmail_group_id": "",
+    "outlookmail_tag_prefix": outlookmail_provider.DEFAULT_TAG_PREFIX,
     # 账号间注册间隔（秒），0=不等待。填一个整数=N秒固定等待，填区间"60-120"=随机等待
     "account_interval": "60-120",
 }
@@ -444,6 +450,18 @@ def record_register_result(
                 log_callback(f"[结果] 写入 jsonl 失败: {exc}")
             except Exception:
                 pass
+    # OutlookMail 平台打标（B 方案）：ok→{prefix}成功，其余→{prefix}失败；非本 provider 零开销
+    if get_email_provider() == "outlookmail" and email:
+        try:
+            outlookmail_provider.mark_result(
+                get_outlookmail_api_base(),
+                get_outlookmail_api_key(),
+                email,
+                success=(status == "ok"),
+                prefix=get_outlookmail_tag_prefix(),
+            )
+        except Exception:
+            pass
     return rec
 
 
@@ -1913,6 +1931,8 @@ def get_email_and_token(api_key=None):
         return mailnest_buy_email(), "_"
     if provider == "inbucket":
         return inbucket_get_email_and_token(domain=managed_domain)
+    if provider == "outlookmail":
+        return outlookmail_take_mailbox()
     if provider == "outlook_rt":
         return outlook_rt_take_mailbox()
     return duckmail_provider.create_mailbox(
@@ -1962,6 +1982,53 @@ def outlook_rt_take_mailbox():
         log_callback=_log,
         max_attempts=20,
         skip_empty_inbox=True,
+    )
+
+
+def get_outlookmail_api_base():
+    return str(config.get("outlookmail_api_base", "") or "").strip() or outlookmail_provider.DEFAULT_API_BASE
+
+
+def get_outlookmail_api_key():
+    return str(config.get("outlookmail_api_key", "") or "").strip()
+
+
+def get_outlookmail_group_id():
+    return str(config.get("outlookmail_group_id", "") or "").strip()
+
+
+def get_outlookmail_tag_prefix():
+    return str(config.get("outlookmail_tag_prefix", "") or "").strip() or outlookmail_provider.DEFAULT_TAG_PREFIX
+
+
+def outlookmail_take_mailbox():
+    key = get_outlookmail_api_key()
+    if not key:
+        raise Exception("请在面板『邮箱服务』配置 OutlookMail 平台 API Key（平台设置页生成）")
+    return outlookmail_provider.take_mailbox(
+        base=get_outlookmail_api_base(),
+        api_key=key,
+        group_id=get_outlookmail_group_id(),
+        prefix=get_outlookmail_tag_prefix(),
+        log_callback=_log,
+    )
+
+
+def outlookmail_get_code(
+    email,
+    timeout=180,
+    poll_interval=4,
+    log_callback=None,
+    cancel_callback=None,
+):
+    return outlookmail_provider.wait_for_code(
+        base=get_outlookmail_api_base(),
+        api_key=get_outlookmail_api_key(),
+        email=email,
+        timeout=timeout,
+        poll_interval=max(3, int(poll_interval or 4)),
+        log_callback=log_callback,
+        cancel_callback=cancel_callback,
     )
 
 
@@ -2054,6 +2121,14 @@ def get_oai_code(
             log_callback=log_callback,
             cancel_callback=cancel_callback,
             resend_callback=resend_callback,
+        )
+    if provider == "outlookmail":
+        return outlookmail_get_code(
+            email,
+            timeout=timeout,
+            poll_interval=max(3, int(poll_interval or 4)),
+            log_callback=log_callback,
+            cancel_callback=cancel_callback,
         )
     if provider == "outlook_rt":
         return outlook_rt_get_code(

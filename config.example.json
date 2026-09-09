@@ -48,5 +48,9 @@
   "outlook_rt_client_id": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
   "inbucket_api_base": "",
   "inbucket_domain": "",
-  "inbucket_random_levels": "0"
+  "inbucket_random_levels": "0",
+  "outlookmail_api_base": "https://mail-pool.yuheng.site",
+  "outlookmail_api_key": "",
+  "outlookmail_group_id": "",
+  "outlookmail_tag_prefix": "Grok-"
 }
