@@ -453,11 +453,13 @@ def record_register_result(
     # OutlookMail 平台打标（B 方案）：ok→{prefix}成功，其余→{prefix}失败；非本 provider 零开销
     if get_email_provider() == "outlookmail" and email:
         try:
+            # 防"假成功"：status=ok 但凭证转换失败（cpa_fail）必须记失败（R51 Minna 教训）
+            real_success = (status == "ok") and ("cpa_fail" not in detail)
             outlookmail_provider.mark_result(
                 get_outlookmail_api_base(),
                 get_outlookmail_api_key(),
                 email,
-                success=(status == "ok"),
+                success=real_success,
                 prefix=get_outlookmail_tag_prefix(),
             )
         except Exception:

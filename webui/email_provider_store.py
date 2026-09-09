@@ -208,6 +208,7 @@ FIELD_DEFINITIONS = {
     "outlookmail_group_id": {
         "label": "使用的分组",
         "type": "select",
+        "dynamic_options": True,
         "options": [{"value": "", "label": "全部（按可用数轮取）"}],
         "placeholder": "保存 API Key 后自动列出分组与剩余数",
     },
@@ -404,6 +405,10 @@ def _normalize_value(name: str, value: object):
         if not text.startswith("/") or "://" in text or any(char.isspace() for char in text):
             raise EmailProviderConfigError(f"{definition['label']}必须是以 / 开头的接口路径")
         return text
+    if field_type == "select" and definition.get("dynamic_options"):
+        # 动态选项（来自后端拉取的平台数据）——保存时不校验静态白名单，
+        # 有效性由取号时平台侧校验兜底（分组不存在→无可用邮箱报错）
+        return _string(value) or definition.get("default", "")
     if field_type == "select":
         options = definition.get("options") or []
         allowed = {
