@@ -199,7 +199,7 @@ def export_to_grok2api() -> dict:
         page += 1
     # 4) 本地候选
     local = load_local_records(AUTH_DIRS)
-    todo = [email for email in valid if email.lower() in local and email.lower() not in existing]
+    todo = [email.lower() for email in valid if email.lower() in local and email.lower() not in existing]
     if not todo:
         return {"ok": True, "to_export": 0, "message": "没有待导出的账号（全部已入库或无有效标签）"}
     # 5) 自动建节点：从当前最大节点 id + 1 起
