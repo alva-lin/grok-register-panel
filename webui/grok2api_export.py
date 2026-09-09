@@ -26,6 +26,54 @@ DEFAULT_CLIENT = "b1a00492-073a-47ea-816f-4c329264a828"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0 Safari/537.36"
 AUTH_DIRS = ["cpa_auth", "grok2api_auth"]
 
+# ---- 导出任务状态（后台线程 + 轮询进度）----
+import threading
+_JOB = {
+    "running": False,
+    "started_at": "",
+    "stage": "idle",          # prep|sync|nodes|assign|done|error
+    "done": 0,
+    "total": 0,
+    "created": 0,
+    "nodes": 0,
+    "message": "",
+    "error": "",
+}
+_JOB_LOCK = threading.Lock()
+
+
+def _set_job(**kw):
+    with _JOB_LOCK:
+        _JOB.update(kw)
+    return dict(_JOB)
+
+
+def export_status() -> dict:
+    with _JOB_LOCK:
+        return dict(_JOB)
+
+
+def start_export_async():
+    with _JOB_LOCK:
+        if _JOB.get("running"):
+            return {"ok": False, "error": "导出任务已在运行", "status": dict(_JOB)}
+        _JOB.update(running=True, started_at="", stage="prep", done=0, total=0,
+                    created=0, nodes=0, message="", error="")
+    def _cb(stage, done=0, total=0, message=""):
+        _set_job(running=True, stage=stage, done=done, total=total, message=message)
+    def _run():
+        try:
+            r = export_to_grok2api(progress_cb=_cb)
+            if r.get("ok") is False:
+                _set_job(running=False, stage="error", error=r.get("error") or "导出失败")
+            else:
+                _set_job(running=False, stage="done", created=r.get("created") or 0,
+                         nodes=r.get("nodes") or 0, message=r.get("message") or "")
+        except Exception as exc:
+            _set_job(running=False, stage="error", error=str(exc)[:200])
+    threading.Thread(target=_run, daemon=True).start()
+    return {"ok": True, "running": True, "status": export_status()}
+
 
 def _json_req(method, url, body=None, token=None, api_key=None, timeout=60):
     headers = {"Content-Type": "application/json", "User-Agent": UA}
@@ -157,8 +205,16 @@ def multipart_import(base: str, token: str, files: list) -> dict:
     return {"http": code, "complete": complete}
 
 
-def export_to_grok2api() -> dict:
-    """执行导出。返回 {to_export, created, nodes, synced_failed, errors}。"""
+def export_to_grok2api(progress_cb=None) -> dict:
+    """执行导出。返回 {to_export, created, nodes, synced_failed, errors}。
+
+    progress_cb(stage, done, total, message) 在 prep/sync/nodes/assign 阶段回调。"""
+    def _cb(stage, done=0, total=0, message=""):
+        if progress_cb:
+            try:
+                progress_cb(stage, done, total, message)
+            except Exception:
+                pass
     g2a_url = os.environ.get("G2A_URL", "http://grok2api:8000")
     g2a_user = os.environ.get("G2A_ADMIN_USER", "admin")
     g2a_pass = os.environ.get("G2A_ADMIN_PASSWORD", "")
@@ -202,6 +258,7 @@ def export_to_grok2api() -> dict:
     todo = [email.lower() for email in valid if email.lower() in local and email.lower() not in existing]
     if not todo:
         return {"ok": True, "to_export": 0, "message": "没有待导出的账号（全部已入库或无有效标签）"}
+    _cb("sync", 0, len(todo), f"准备导入 {len(todo)} 个账号")
     # 5) multipart 导入
     files, emails = [], []
     for email in todo:
@@ -216,6 +273,7 @@ def export_to_grok2api() -> dict:
         res = multipart_import(g2a_url, token, files[i:i + 20])
         if res.get("complete"):
             created += int(res["complete"].get("created") or 0)
+        _cb("sync", min(i + 20, len(files)), len(files), f"同步账号 {min(i + 20, len(files))}/{len(files)}")
     # 7) enabled + assign（1:1 节点）
     ids = []
     for email in emails:
@@ -226,6 +284,7 @@ def export_to_grok2api() -> dict:
                 ids.append(str(it.get("id")))
                 break
     if ids:
+        _cb("nodes", 0, len(ids), "创建/复用出口节点")
         _json_req("PATCH", g2a_url.rstrip("/") + "/api/admin/v1/accounts/batch", {"ids": ids, "enabled": True, "provider": "grok_build"}, token=token)
     # 6) 建/复用节点：优先复用无绑定的空节点，差额才新建（根治空节点堆积）
     code, nd = _json_req("GET", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes?page=1&pageSize=500", token=token)
@@ -239,9 +298,12 @@ def export_to_grok2api() -> dict:
         code, r = _json_req("POST", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes",
                             {"name": f"eg-{seq:03d}", "scope": "grok_build", "proxyURL": proxy}, token=token)
         node_ids.append((r.get("data") or {}).get("id") or r.get("id"))
+    assigned = 0
     for nid, aid in zip(node_ids, ids):
         _json_req("POST", g2a_url.rstrip("/") + f"/api/admin/v1/egress-nodes/{nid}/accounts",
                   {"provider": "grok_build", "ids": [aid], "mode": "auto"}, token=token)
+        assigned += 1
+        _cb("assign", assigned, len(ids), f"分配出口 {assigned}/{len(ids)}")
     return {
         "ok": True,
         "to_export": len(todo),

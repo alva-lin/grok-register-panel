@@ -3435,14 +3435,26 @@ async function doStart() {
 async function doExportG2A() {
   const btn = document.getElementById("btn-export-g2a");
   btn.disabled = true;
-  setMsg("ctrl-msg", "导出中…", "ok");
+  setMsg("ctrl-msg", "启动导出…", "ok");
   try {
     const j = await api("/api/export-grok2api", { method: "POST", body: "{}" });
     if (j.ok === false) throw new Error(j.error || "export failed");
-    setMsg("ctrl-msg", (j.message || "导出完成") + "（待导出 " + (j.to_export||0) + "，导入 " + (j.created||0) + "，建节点 " + (j.nodes||0) + "）", "ok");
-    setTimeout(refresh, 1500);
-  } catch (e) { setMsg("ctrl-msg", String(e.message || e), "err"); }
-  btn.disabled = false;
+    let timer = setInterval(async () => {
+      try {
+        const s = await api("/api/export-grok2api", { method: "GET" });
+        if (!s || s.running === false) {
+          clearInterval(timer);
+          btn.disabled = false;
+          if (s && s.stage === "error") setMsg("ctrl-msg", "导出失败：" + (s.error || "?"), "err");
+          else setMsg("ctrl-msg", (s && s.message ? s.message + " " : "") + "（导入 " + (s ? s.created : 0) + "，建节点 " + (s ? s.nodes : 0) + "）", "ok");
+          setTimeout(refresh, 1500);
+          return;
+        }
+        const stageLabel = {prep:"准备中", sync:"同步账号", nodes:"建节点", assign:"分配出口"}[s.stage] || s.stage;
+        setMsg("ctrl-msg", "导出中：" + stageLabel + (s.total ? " " + s.done + "/" + s.total : "") + "…", "ok");
+      } catch (e) { clearInterval(timer); btn.disabled = false; setMsg("ctrl-msg", String(e.message || e), "err"); }
+    }, 1500);
+  } catch (e) { btn.disabled = false; setMsg("ctrl-msg", String(e.message || e), "err"); }
 }
 async function doStop() {
   document.getElementById("btn-stop").disabled = true;
@@ -4473,8 +4485,11 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/export-grok2api":
             try:
                 from webui import grok2api_export
-                result = grok2api_export.export_to_grok2api()
-                self._json(200 if result.get("ok") else 424, result)
+                if self.command == "GET":
+                    self._json(200, grok2api_export.export_status())
+                else:
+                    result = grok2api_export.start_export_async()
+                    self._json(200 if result.get("ok") else 409, result)
             except Exception as e:
                 self._json(500, {"ok": False, "error": redact_log_line(str(e))})
             return
