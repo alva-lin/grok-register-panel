@@ -16,6 +16,7 @@ import base64
 import datetime as dt
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -205,6 +206,42 @@ def multipart_import(base: str, token: str, files: list) -> dict:
     return {"http": code, "complete": complete}
 
 
+def _list_all_nodes(g2a_url: str, token: str, scope: str = "grok_build") -> List[dict]:
+    """分页拉取全部出口节点（旧实现只取 pageSize=500 的第一页，编号推导会因此错位）。"""
+    items: List[dict] = []
+    page = 1
+    while page <= 50:
+        query = urllib.parse.urlencode({"scope": scope, "page": page, "pageSize": 1000})
+        code, data = _json_req("GET", g2a_url.rstrip("/") + f"/api/admin/v1/egress-nodes?{query}", token=token)
+        if code != 200:
+            break
+        payload = data.get("data") or {}
+        batch = payload.get("items") or []
+        items.extend(batch)
+        if not batch or len(items) >= int(payload.get("total") or 0):
+            break
+        page += 1
+    return items
+
+
+def _node_identity(node: dict) -> str:
+    """从 proxyDisplay 解析粘性身份（Platform.Account 的 Account 部分）。"""
+    display = node.get("proxyDisplay") or ""
+    match = re.search(r"//([^:@/]+)\.([^:@/]+):", display)
+    return match.group(2) if match else ""
+
+
+def _identity_for(email: str, used: set) -> str:
+    """身份 = 邮箱 localpart；冲突时加数字后缀；结果写回 used 以保证批内唯一。"""
+    base = re.sub(r"[^a-z0-9]+", "-", (email or "").split("@", 1)[0].strip().lower()).strip("-")[:40] or "acct"
+    identity, suffix = base, 1
+    while identity in used:
+        suffix += 1
+        identity = f"{base}-{suffix}"
+    used.add(identity)
+    return identity
+
+
 def export_to_grok2api(progress_cb=None) -> dict:
     """执行导出。返回 {to_export, created, nodes, synced_failed, errors}。
 
@@ -286,24 +323,31 @@ def export_to_grok2api(progress_cb=None) -> dict:
     if ids:
         _cb("nodes", 0, len(ids), "创建/复用出口节点")
         _json_req("PATCH", g2a_url.rstrip("/") + "/api/admin/v1/accounts/batch", {"ids": ids, "enabled": True, "provider": "grok_build"}, token=token)
-    # 6) 建/复用节点：优先复用无绑定的空节点，差额才新建（根治空节点堆积）
-    code, nd = _json_req("GET", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes?page=1&pageSize=500", token=token)
-    nodes = (nd.get("data") or {}).get("items") or []
-    reusable = [n for n in nodes if not (n.get("assignedAccountCount") or 0)]
-    max_id = max([int(n.get("id") or 0) for n in nodes] or [0])
-    node_ids = [int(n["id"]) for n in reusable[: len(ids)]]
-    for i in range(len(node_ids), len(ids)):
-        seq = max_id + 1 + (i - len(node_ids)) + 1
-        proxy = f"http://{platform}.grok-{seq:03d}:{proxy_token}@{gateway}"
+    # 6) 建/复用节点：身份=邮箱 localpart（唯一、可读、幂等）
+    #
+    # 旧实现用 max_id 自增序号推导身份（eg-633 / runtime.grok-633），一旦重跑或分批导入
+    # 就会把已用过的身份整段再占用一遍，造成「一个身份挂几千个节点、出口 IP 全相同」。
+    # 现在改为：身份完全由账号派生 + 已占用身份集合去重，不依赖任何外部计数器，
+    # 重跑任意次都不会碰撞，也不会因为复用空节点而丢身份。
+    all_nodes = _list_all_nodes(g2a_url, token)
+    used_identities = {ident for ident in (_node_identity(n) for n in all_nodes) if ident}
+    node_ids = []
+    for aid, email in zip(ids, emails):
+        identity = _identity_for(email, used_identities)
+        proxy = f"http://{platform}.grok-{identity}:{proxy_token}@{gateway}"
         code, r = _json_req("POST", g2a_url.rstrip("/") + "/api/admin/v1/egress-nodes",
-                            {"name": f"eg-{seq:03d}", "scope": "grok_build", "proxyURL": proxy}, token=token)
-        node_ids.append((r.get("data") or {}).get("id") or r.get("id"))
-    assigned = 0
-    for nid, aid in zip(node_ids, ids):
-        _json_req("POST", g2a_url.rstrip("/") + f"/api/admin/v1/egress-nodes/{nid}/accounts",
-                  {"provider": "grok_build", "ids": [aid], "mode": "auto"}, token=token)
-        assigned += 1
-        _cb("assign", assigned, len(ids), f"分配出口 {assigned}/{len(ids)}")
+                            {"name": f"eg-{identity}", "scope": "grok_build", "proxyURL": proxy, "enabled": True},
+                            token=token)
+        nid = (r.get("data") or {}).get("id") or r.get("id")
+        if not nid:
+            errors.append(f"建节点失败 {email}: HTTP {code}")
+            continue
+        if _json_req("POST", g2a_url.rstrip("/") + f"/api/admin/v1/egress-nodes/{nid}/accounts",
+                     {"provider": "grok_build", "ids": [aid], "mode": "auto"}, token=token)[0] != 200:
+            errors.append(f"绑定出口失败 {email}")
+            continue
+        node_ids.append(int(nid))
+        _cb("assign", len(node_ids), len(ids), f"分配出口 {len(node_ids)}/{len(ids)}")
     return {
         "ok": True,
         "to_export": len(todo),
