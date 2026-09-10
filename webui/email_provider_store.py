@@ -461,7 +461,9 @@ def _provider_fields_payload(provider: str, values: dict) -> list:
                     str(values.get("outlookmail_api_key") or ""),
                     str(values.get("outlookmail_tag_prefix") or "") or _om.DEFAULT_TAG_PREFIX,
                 )
-                options = [{"value": "", "label": "全部（按可用数轮取）"}]
+                avail_all = sum(int(g.get("available") or 0) for g in stats)
+                total_all = sum(int(g.get("total") or 0) for g in stats)
+                options = [{"value": "", "label": f"全部（剩 {avail_all}/{total_all}）"}]
                 options += [
                     {
                         "value": str(g["group_id"]),
